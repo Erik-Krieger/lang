@@ -1,0 +1,7 @@
+pub fn main(l: u32, r:u32) -> u32 {
+    let my_var_1 = l + r;
+
+    let _test1: i64 = 42;
+
+    return my_var_1;
+}
