@@ -3,5 +3,7 @@ pub fn main(l: u32, r:u32) -> u32 {
 
     let _test1: i64 = 42;
 
+    _test2 %= 17:
+
     return my_var_1;
 }
