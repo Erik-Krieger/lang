@@ -1,6 +1,5 @@
 use std::{env, fs, process};
 
-mod lexer;
 mod parser;
 
 fn main() {
@@ -19,7 +18,5 @@ fn main() {
     }
 
     let file_path = &args[1];
-    let token_list = parser::parse_file(file_path);
-
-    dbg!(token_list);
+    let _compiler: parser::Compiler = parser::compile(file_path);
 }
