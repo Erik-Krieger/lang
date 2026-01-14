@@ -1,6 +1,14 @@
 // {All of this should be removed from the final tokens.}
-fn main() -> i64 {
+pub fn main() {
     // Some more comments to remove.
     return 0;
 }
 // hdfjsdghfjkhsdafgdasjhfgashjkfgajkdzhsf
+
+fn min(l: i64, r: i64) -> i64 {
+    if l < r {
+        return l;
+    } else {
+        return r;
+    }
+}

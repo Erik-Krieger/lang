@@ -4,7 +4,7 @@ mod parser;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    dbg!(&args);
+    //dbg!(&args);
 
     if args.len() < 2 {
         println!("No file specified!");
