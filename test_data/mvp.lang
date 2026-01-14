@@ -1,7 +1,11 @@
 // {All of this should be removed from the final tokens.}
 pub fn main() {
     // Some more comments to remove.
-    return 0;
+
+    let min_value = min(17, 42);
+    min_value = 1337;
+
+    return min_value;
 }
 // hdfjsdghfjkhsdafgdasjhfgashjkfgajkdzhsf
 

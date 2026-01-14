@@ -1,4 +1,4 @@
-use std::{fs, process};
+use std::{collections::HashMap, convert::identity, fs, process};
 
 #[derive(Debug, Clone)]
 pub enum Token {
@@ -146,9 +146,13 @@ pub fn compile(file_path: &String) -> Compiler {
 
     merge_tokens_round_one(&mut compiler);
 
-    dbg!(&compiler);
+    //dbg!(&compiler);
 
     split_functions(&mut compiler);
+
+    //dbg!(&compiler);
+
+    merge_tokens_round_two(&mut compiler);
 
     dbg!(&compiler);
 
@@ -227,6 +231,7 @@ fn process_token(token: char, compiler: &mut Compiler) {
         }
         Token::NumericLiteral { .. } => {
             if token.is_ascii_digit() || token == '_' || token == ',' {
+                compiler.current_buffer.push(token);
                 return;
             } else if token == '.' && compiler.period_count == 0 {
                 compiler.period_count += 1;
@@ -645,6 +650,7 @@ fn jti(
 fn split_functions(compiler: &mut Compiler) {
     let mut function_body_start_index: usize = 0;
     let mut indent_count: u64 = 0;
+    let mut parsing_params: bool = false;
     let mut current_function: Option<Function> = None;
 
     for (idx, token) in (&compiler.tokens).iter().enumerate() {
@@ -675,7 +681,9 @@ fn split_functions(compiler: &mut Compiler) {
                         Some(func) => {
                             let mut func = func.clone();
 
-                            for token in (&compiler.tokens)[function_body_start_index..idx].iter() {
+                            for token in
+                                (&compiler.tokens)[function_body_start_index..idx - 1].iter()
+                            {
                                 func.body.push(token.clone());
                             }
 
@@ -688,21 +696,163 @@ fn split_functions(compiler: &mut Compiler) {
             }
             Token::ArrowRight => {
                 assert!(compiler.tokens.len() > idx + 1);
-                if indent_count == 0 {
-                    match &compiler.tokens[idx + 1] {
-                        Token::DataType { data_type, .. } => match &mut current_function {
-                            Some(func) => {
-                                func.return_type = data_type.clone();
-                            }
-                            None => {}
-                        },
-                        _ => {}
+                if indent_count != 0 {
+                    continue;
+                }
+
+                match &compiler.tokens[idx + 1] {
+                    Token::DataType { data_type, .. } => match &mut current_function {
+                        Some(func) => {
+                            func.return_type = data_type.clone();
+                        }
+                        None => {}
+                    },
+                    _ => {}
+                }
+            }
+            Token::OpenParen => {
+                assert!(compiler.tokens.len() > idx + 1);
+                if indent_count != 0 {
+                    continue;
+                }
+
+                parsing_params = true;
+            }
+            Token::CloseParen => {
+                assert!(compiler.tokens.len() > idx + 1);
+                if indent_count != 0 {
+                    continue;
+                }
+
+                parsing_params = false;
+            }
+            Token::TypedVariable { .. } => {
+                if !parsing_params {
+                    continue;
+                }
+
+                match &mut current_function {
+                    Some(func) => {
+                        func.parameters.push(token.clone());
                     }
+                    None => {}
                 }
             }
             _ => {}
         }
     }
+
+    compiler.tokens.clear();
+}
+
+fn merge_tokens_round_two(compiler: &mut Compiler) {
+    for func in &mut compiler.functions {
+        let mut func_bod: Vec<Token> = Vec::new();
+        let mut skip_count: usize = 0;
+        let mut known_vars: Vec<Token> = Vec::new();
+
+        for (idx, _) in func.body.iter().enumerate() {
+            if skip_count > 0 {
+                skip_count -= 1;
+                continue;
+            }
+
+            match merge_inner(&func.body, &mut skip_count, idx, &mut known_vars) {
+                Some(token) => {
+                    func_bod.push(token);
+                }
+                None => {}
+            }
+        }
+
+        func.body = func_bod;
+    }
+}
+
+fn merge_inner(
+    func_body: &Vec<Token>,
+    skip_count: &mut usize,
+    idx: usize,
+    known_vars: &mut Vec<Token>,
+) -> Option<Token> {
+    if func_body.len() <= idx {
+        return None;
+    }
+
+    let token = &func_body[idx];
+    match token {
+        Token::Keyword { name } => match &name[..] {
+            KEYWORD_LET => match merge_inner(func_body, skip_count, idx + 1, known_vars) {
+                Some(tok) => match tok {
+                    Token::TypedVariable { .. } => {
+                        *skip_count += 1;
+                        return Some(tok);
+                    }
+                    _ => return Some(token.clone()),
+                },
+                None => {
+                    // TODO: Log error here, a let needs to be followed by something
+                    return Some(Token::Bogus);
+                }
+            },
+            _ => return Some(token.clone()),
+        },
+        Token::Identifier { name } => {
+            for vars in known_vars.clone() {
+                match vars {
+                    Token::TypedVariable {
+                        name: var_name,
+                        data_type: dt,
+                    } => {
+                        if var_name == *name {
+                            return Some(Token::TypedVariable {
+                                name: name.to_string(),
+                                data_type: dt.clone(),
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            match merge_inner(func_body, skip_count, idx + 1, known_vars) {
+                Some(tok) => match tok {
+                    Token::DataType { data_type } => {
+                        *skip_count += 1;
+                        let token = Token::TypedVariable {
+                            name: name.to_string(),
+                            data_type: data_type.clone(),
+                        };
+                        known_vars.push(token.clone());
+                        return Some(token);
+                    }
+                    _ => {
+                        return Some(token.clone());
+                    }
+                },
+                None => {
+                    // TODO: add error:
+                    return Some(Token::Bogus);
+                }
+            }
+        }
+        Token::Colon => match merge_inner(func_body, skip_count, idx + 1, known_vars) {
+            Some(tok) => match tok {
+                Token::DataType { data_type } => {
+                    *skip_count += 1;
+                    return Some(Token::DataType { data_type });
+                }
+                _ => return Some(Token::Colon),
+            },
+            None => {
+                // TODO: Log error here, a : needs to be followed by something
+                return Some(Token::Bogus);
+            }
+        },
+        _ => return Some(token.clone()),
+    }
+
+    //dbg!(token);
+    //unreachable!();
 }
 
 fn is_keyword(token: &String) -> bool {
