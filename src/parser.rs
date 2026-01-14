@@ -28,6 +28,13 @@ pub enum Token {
     DoubleQuote,
     Ampersand,
     Pipe,
+    NewLine,
+    PubModifier,
+
+    LogicalAnd,
+    LogicalOr,
+
+    ArrowRight,
     ReturnTypeSpecifier {
         data_type: DataType,
         is_reference: bool,
@@ -39,7 +46,8 @@ pub enum Token {
         name: String,
     },
     DataType {
-        name: String,
+        data_type: DataType,
+        is_reference: bool,
     },
     CharLiteral {
         value: String,
@@ -57,6 +65,11 @@ pub enum Token {
         return_type: DataType,
         params: Vec<Token>,
         body: Vec<Token>,
+    },
+
+    FunctionDefinition {
+        name: String,
+        public: bool,
     },
 
     ParamToken {
@@ -103,7 +116,7 @@ pub fn compile(file_path: &String) -> Compiler {
 
     //dbg!(&compiler);
 
-    merge_tokens(&mut compiler);
+    merge_tokens_round_one(&mut compiler);
 
     dbg!(&compiler);
 
@@ -170,6 +183,7 @@ fn process_token(token: char, compiler: &mut Compiler) {
                     '_' => Token::Underscore,
                     '&' => Token::Ampersand,
                     '|' => Token::Pipe,
+                    '\n' => Token::NewLine,
                     _ => Token::Bogus,
                 };
 
@@ -204,9 +218,16 @@ fn process_token(token: char, compiler: &mut Compiler) {
                 let value: String = compiler.current_buffer.iter().cloned().collect();
 
                 if is_keyword(&value) {
-                    compiler.tokens.push(Token::Keyword { name: value });
+                    if &value == "pub" {
+                        compiler.tokens.push(Token::PubModifier);
+                    } else {
+                        compiler.tokens.push(Token::Keyword { name: value });
+                    }
                 } else if is_datatype(&value) {
-                    compiler.tokens.push(Token::DataType { name: value });
+                    compiler.tokens.push(Token::DataType {
+                        data_type: get_type_from_name(&value),
+                        is_reference: false,
+                    });
                 } else {
                     compiler.tokens.push(Token::Identifier { name: value });
                 }
@@ -261,7 +282,144 @@ fn process_token(token: char, compiler: &mut Compiler) {
     };
 }
 
-fn merge_tokens(compiler: &mut Compiler) {
+fn merge_tokens_round_one(compiler: &mut Compiler) {
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut skip_count: usize = 0;
+    let old_token_count: usize = (&compiler.tokens).len();
+
+    'outer: for (idx, token) in (&compiler.tokens).iter().enumerate() {
+        if skip_count > 0 {
+            skip_count -= 1;
+            continue;
+        }
+
+        match token {
+            // begin comment handling
+            Token::Slash => {
+                assert!(old_token_count > idx + 1);
+                match &compiler.tokens[idx + 1] {
+                    Token::Slash => {
+                        for look_ahead_count in idx + 2..old_token_count {
+                            match &compiler.tokens[look_ahead_count] {
+                                Token::NewLine => {
+                                    skip_count = look_ahead_count - idx;
+                                    continue 'outer;
+                                }
+                                _ => {}
+                            }
+                        }
+                        break 'outer;
+                    }
+                    Token::Asterisk => {
+                        for look_ahead_count in idx + 2..old_token_count {
+                            match &compiler.tokens[look_ahead_count] {
+                                Token::Asterisk => {
+                                    match &compiler.tokens[look_ahead_count + 1] {
+                                        Token::Slash => {
+                                            skip_count = look_ahead_count + 1 - idx;
+                                            continue 'outer;
+                                        }
+                                        _ => {}
+                                    }
+                                    break 'outer;
+                                }
+                                _ => {}
+                            }
+                        }
+                        // If we reach this point, we are at the end of the file and have not found a closing sequence for comments.
+                        // Either way we stop herer
+                        // TODO: Maybe output an error.
+                        break 'outer;
+                    }
+                    _ => {}
+                }
+            }
+            // end comment handling
+
+            // At this point we don't need the new lines anymore
+            Token::NewLine => {}
+            Token::Minus => {
+                assert!(old_token_count > idx + 1);
+                match &compiler.tokens[idx + 1] {
+                    Token::CloseAngle => {
+                        tokens.push(Token::ArrowRight);
+                        skip_count = 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            Token::Ampersand => {
+                assert!(old_token_count > idx + 1);
+                match &compiler.tokens[idx + 1] {
+                    Token::DataType { data_type, .. } => {
+                        tokens.push(Token::DataType {
+                            data_type: *data_type,
+                            is_reference: true,
+                        });
+                        skip_count = 1;
+                        continue;
+                    }
+                    Token::Ampersand => {
+                        tokens.push(Token::LogicalAnd);
+                        skip_count = 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            Token::Pipe => {
+                assert!(old_token_count > idx + 1);
+                match &compiler.tokens[idx + 1] {
+                    Token::Pipe => {
+                        tokens.push(Token::LogicalOr);
+                        skip_count = 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            Token::PubModifier => {
+                assert!(old_token_count > idx + 2);
+                match &compiler.tokens[idx + 1] {
+                    Token::Keyword { name } => match &name[..] {
+                        "fn" => match &compiler.tokens[idx + 2] {
+                            Token::Identifier { name } => {
+                                tokens.push(Token::FunctionDefinition {
+                                    name: name.to_string(),
+                                    public: true,
+                                });
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+
+            Token::Keyword { name } => match &name[..] {
+                "fn" => {}
+                _ => {}
+            },
+            tok => {
+                tokens.push(tok.clone());
+            }
+        }
+    }
+
+    compiler.tokens = tokens;
+}
+
+fn jti(
+    compiler: &mut Compiler,
+    new_tokens: &mut Vec<Token>,
+    skip_count: &mut usize,
+    old_token_count: usize,
+) {
+}
+
+/*fn merge_tokens(compiler: &mut Compiler) {
     let mut tokens: Vec<Token> = Vec::new();
     let mut skip_count: u64 = 0;
 
@@ -419,7 +577,7 @@ fn merge_tokens_old(compiler: &mut Compiler) {
     }
 
     compiler.tokens = tokens;
-}
+}*/
 
 fn is_keyword(token: &String) -> bool {
     match &token[..] {
